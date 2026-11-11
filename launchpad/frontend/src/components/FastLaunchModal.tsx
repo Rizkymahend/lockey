@@ -8,6 +8,7 @@ import { Rocket, X, Loader2, CheckCircle2, AlertCircle, Coins, Sparkles, Externa
 import { CONTRACT_ADDRESSES } from "@/config/chain";
 import { PONS_FACTORY_ABI, PONS_ROUTER_ABI } from "@/config/abis";
 import { ParsedTweet } from "@/app/api/x-feed/route";
+import { checkLogoBeforeLaunch } from "@/lib/logo";
 
 interface FastLaunchModalProps {
   tweet: ParsedTweet | null;
@@ -24,7 +25,7 @@ export function FastLaunchModal({ tweet, isOpen, onClose }: FastLaunchModalProps
   const [logoUrl, setLogoUrl] = useState("");
   const [description, setDescription] = useState("");
   const [devBuyEth, setDevBuyEth] = useState("");
-  const [creatorFeePercent, setCreatorFeePercent] = useState<number>(1);
+  const [creatorFeePercent, setCreatorFeePercent] = useState<number>(2); // Default 2%, same as /create
   const [website, setWebsite] = useState("");
   const [statusError, setStatusError] = useState<string | null>(null);
 
@@ -139,6 +140,13 @@ export function FastLaunchModal({ tweet, isOpen, onClose }: FastLaunchModalProps
       return;
     }
 
+    // The logo is written on-chain and can never be changed: it must be a public link that loads.
+    const logoError = await checkLogoBeforeLaunch(logoUrl);
+    if (logoError) {
+      setStatusError(logoError);
+      return;
+    }
+
     try {
       const salt = toHex(crypto.getRandomValues(new Uint8Array(32)));
       const fallbackEconomics = expectedEconomics || "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -146,7 +154,7 @@ export function FastLaunchModal({ tweet, isOpen, onClose }: FastLaunchModalProps
       const tokenParams = {
         name: name.trim(),
         symbol: symbol.trim().toUpperCase(),
-        logo: logoUrl.trim() || "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        logo: logoUrl.trim(),
         description: description.trim(),
         socials: {
           twitter: tweet.tweetUrl || `https://x.com/${tweet.author.username}`,

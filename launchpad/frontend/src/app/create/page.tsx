@@ -3,11 +3,14 @@
 import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useAccount, useWriteContract, useWaitForTransactionReceipt, useReadContract, useBalance } from "wagmi";
-import { formatUnits, parseUnits, parseEventLogs, toHex } from "viem";
+import { formatUnits, parseUnits, parseEventLogs, toHex, isAddress, getAddress } from "viem";
 import { Rocket, Info, AlertCircle, CheckCircle2, Sparkles, UploadCloud, X, Loader2, Coins, Globe, MessageSquare, Send } from "lucide-react";
 import { CONTRACT_ADDRESSES } from "@/config/chain";
 import { PONS_FACTORY_ABI, PONS_ROUTER_ABI } from "@/config/abis";
 import { useToast } from "@/components/Toast";
+import { checkLogoBeforeLaunch, logoDisplayUrl, logoProblem } from "@/lib/logo";
+
+const DRAFT_KEY = "lockey_create_draft";
 
 export default function CreateTokenPage() {
   const router = useRouter();
@@ -24,7 +27,11 @@ export default function CreateTokenPage() {
   const [discord, setDiscord] = useState("");
   
   // Custom Creator Royalty Rate Selection (0% to 10%)
-  const [creatorFeePercent, setCreatorFeePercent] = useState<number>(1); // Default 1%
+  const [creatorFeePercent, setCreatorFeePercent] = useState<number>(2); // Default 2%: best median creator tax in the 30-day Pons data
+  // Pons native buyback: part of the swept fees buys the token back on-chain (verifiable by holders)
+  const [buyback, setBuyback] = useState(false);
+  // Wallet that receives the royalties (empty = the launching wallet). Written on-chain, can't be changed later.
+  const [feeRecipient, setFeeRecipient] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   // Optional Initial Dev Buy (in ETH)
@@ -36,25 +43,39 @@ export default function CreateTokenPage() {
   const [isUploadingImage, setIsUploadingImage] = useState(false);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isDragging, setIsDragging] = useState(false);
+  const [logoLink, setLogoLink] = useState("");
+  const [isCheckingLogo, setIsCheckingLogo] = useState(false);
+  const [draftReady, setDraftReady] = useState(false);
 
   // Pre-fill from URL query parameters (from X Narrative Radar)
   useEffect(() => {
     if (typeof window !== "undefined") {
       const searchParams = new URLSearchParams(window.location.search);
-      const qName = searchParams.get("name");
-      const qSymbol = searchParams.get("symbol");
-      const qDesc = searchParams.get("desc") || searchParams.get("description");
-      const qLogo = searchParams.get("logo") || searchParams.get("imageUrl");
-      const qTwitter = searchParams.get("twitter");
-      const qWebsite = searchParams.get("website");
+      // No params in the link (reload, wallet connect, menu click): use the saved draft.
+      let draft: Record<string, string> = {};
+      if (!searchParams.get("name") && !searchParams.get("symbol")) {
+        try { draft = JSON.parse(localStorage.getItem(DRAFT_KEY) || "{}") || {}; } catch {}
+      }
+      const qName = searchParams.get("name") || draft.name;
+      const qSymbol = searchParams.get("symbol") || draft.symbol;
+      const qDesc = searchParams.get("desc") || searchParams.get("description") || draft.description;
+      const qLogo = searchParams.get("logo") || searchParams.get("imageUrl") || draft.imageUrl;
+      const qTwitter = searchParams.get("twitter") || draft.twitter;
+      const qWebsite = searchParams.get("website") || draft.website;
+      if (draft.telegram) setTelegram(draft.telegram);
+      if (draft.discord) setDiscord(draft.discord);
 
       if (qName) setName(qName);
       if (qSymbol) setSymbol(qSymbol);
       if (qDesc) setDescription(qDesc);
       if (qLogo) {
         setImageUrl(qLogo);
-        setImagePreview(qLogo);
+        setImagePreview(logoDisplayUrl(qLogo));
+        setLogoLink(qLogo);
+        setUploadError(logoProblem(qLogo));
       }
+      const qRecipient = searchParams.get("recipient");
+      if (qRecipient) setFeeRecipient(qRecipient);
       if (qTwitter) setTwitter(qTwitter);
       if (qWebsite) {
         setWebsite(qWebsite);
@@ -62,7 +83,18 @@ export default function CreateTokenPage() {
         setWebsite(qTwitter);
       }
     }
+    setDraftReady(true);
   }, []);
+
+  // Keep the form in a draft so a reload never empties it.
+  useEffect(() => {
+    if (!draftReady) return;
+    try {
+      const d = { name, symbol, description, imageUrl, website, twitter, telegram, discord };
+      if (Object.values(d).some(Boolean)) localStorage.setItem(DRAFT_KEY, JSON.stringify(d));
+      else localStorage.removeItem(DRAFT_KEY);
+    } catch {}
+  }, [draftReady, name, symbol, description, imageUrl, website, twitter, telegram, discord]);
 
   const uploadToPinata = async (file: File) => {
     setIsUploadingImage(true);
@@ -98,6 +130,9 @@ export default function CreateTokenPage() {
           : (data.url || data.gatewayUrl || data.ipfsUri));
 
       setImageUrl(resolvedUrl);
+      // Not on IPFS and not on a public https site: warn now, the launch button refuses it later.
+      const problem = logoProblem(resolvedUrl);
+      if (problem) setUploadError(data.local ? `Saved only on this server, not on IPFS. ${problem}` : problem);
     } catch (err: unknown) {
       console.error("Image upload error:", err);
       const msg = err instanceof Error ? err.message : "Failed to upload image";
@@ -163,6 +198,7 @@ export default function CreateTokenPage() {
     }
     setImagePreview(null);
     setImageUrl("");
+    setLogoLink("");
     setUploadError(null);
   };
 
@@ -266,6 +302,8 @@ export default function CreateTokenPage() {
           txHash
         );
 
+        try { localStorage.removeItem(DRAFT_KEY); } catch {}
+
         // Automatically navigate into the token page
         const timer = setTimeout(() => {
           router.push(`/token/${tokenAddr}`);
@@ -297,6 +335,22 @@ export default function CreateTokenPage() {
       return;
     }
 
+    const recipientInput = feeRecipient.trim();
+    if (recipientInput && !isAddress(recipientInput)) {
+      setErrorMessage("Royalty recipient must be a valid 0x wallet address (or leave it empty to use your wallet).");
+      return;
+    }
+    const royaltyRecipient = recipientInput ? getAddress(recipientInput) : address;
+
+    // The logo is written on-chain and can never be changed, so make sure anyone can load it.
+    setIsCheckingLogo(true);
+    const logoError = await checkLogoBeforeLaunch(imageUrl);
+    setIsCheckingLogo(false);
+    if (logoError) {
+      setErrorMessage(logoError);
+      return;
+    }
+
     try {
       const salt = toHex(crypto.getRandomValues(new Uint8Array(32)));
       const fallbackEconomics = expectedEconomics || "0x0000000000000000000000000000000000000000000000000000000000000000";
@@ -304,7 +358,7 @@ export default function CreateTokenPage() {
       const tokenParams = {
         name,
         symbol,
-        logo: imageUrl || "ipfs://bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3oclgtqy55fbzdi",
+        logo: imageUrl.trim(),
         description,
         socials: {
           twitter: twitter.trim(),
@@ -313,9 +367,9 @@ export default function CreateTokenPage() {
           website: website.trim(),
           farcaster: "",
         },
-        creatorFeeRecipient: address,
+        creatorFeeRecipient: royaltyRecipient,
         creatorTaxBps: Math.min(Math.max(Math.round(creatorFeePercent * 100), 0), 1000),
-        buybackEnabled: false,
+        buybackEnabled: buyback,
         expectedEconomics: fallbackEconomics,
         salt,
       };
@@ -419,7 +473,7 @@ export default function CreateTokenPage() {
               </div>
               
               <p className="text-xs font-hand text-slate-400">
-                Automated royalties transferred to your wallet on every buy & sell trade across the bonding curve (max 10%):
+                Royalties collect on every buy & sell on the bonding curve (max 10%). They are swept to the Pons fee escrow and you claim them from there:
               </p>
 
               <div className="grid grid-cols-5 gap-2.5 pt-1">
@@ -442,6 +496,26 @@ export default function CreateTokenPage() {
                   );
                 })}
               </div>
+
+              <label className="flex items-center gap-2 pt-2 text-sm font-hand text-slate-300">
+                <input type="checkbox" checked={buyback} onChange={(e) => setBuyback(e.target.checked)} />
+                On-chain buyback (part of the fees buys the token back when fees are swept)
+              </label>
+
+              <label className="block text-sm font-hand font-bold text-slate-300 pt-2">
+                Royalty Recipient (Optional)
+              </label>
+              <input
+                type="text"
+                placeholder={address ? `${address} (your wallet)` : "0x… (empty = your wallet)"}
+                value={feeRecipient}
+                onChange={(e) => setFeeRecipient(e.target.value)}
+                spellCheck={false}
+                className="w-full px-4 py-2.5 sketch-inset text-xs text-white font-mono placeholder:text-slate-500 focus:outline-none"
+              />
+              <p className="text-xs font-hand text-slate-400">
+                Royalties go to this wallet and it claims them in the Creator Dashboard. Written on-chain — cannot be changed after launch.
+              </p>
             </div>
 
 
@@ -555,6 +629,23 @@ export default function CreateTokenPage() {
                   <span>{uploadError}</span>
                 </p>
               )}
+
+              {/* Alternative: an image that is already online (IPFS or a public https link) */}
+              <input
+                type="text"
+                placeholder="…or paste an image link (ipfs://… or https://…)"
+                value={logoLink}
+                onChange={(e) => {
+                  const v = e.target.value.trim();
+                  setLogoLink(e.target.value);
+                  setImageFile(null);
+                  setImageUrl(v);
+                  setImagePreview(v ? logoDisplayUrl(v) : null);
+                  setUploadError(v ? logoProblem(v) : null);
+                }}
+                className="mt-2 w-full px-4 py-2 sketch-inset text-xs font-mono text-white placeholder:text-slate-500 focus:outline-none"
+              />
+              <p className="mt-1 text-[11px] font-hand text-slate-500">The image is saved on-chain at launch and can&apos;t be changed later.</p>
             </div>
 
             {/* Social Links */}
@@ -692,7 +783,7 @@ export default function CreateTokenPage() {
 
             <button
               type="submit"
-              disabled={isSubmitting || isWaitingTx || isUploadingImage || isInsufficientEth || !isConnected}
+              disabled={isSubmitting || isWaitingTx || isUploadingImage || isCheckingLogo || isInsufficientEth || !isConnected}
               className="w-full py-3.5 sketch-btn-primary text-slate-950 font-bold text-xl flex items-center justify-center space-x-2 disabled:opacity-50"
             >
               {isSubmitting || isWaitingTx ? (
@@ -756,6 +847,12 @@ export default function CreateTokenPage() {
               <div className="flex justify-between items-center text-slate-300">
                 <span>Creator Royalty:</span>
                 <span className="font-mono font-bold text-yellow-300">{creatorFeePercent}%</span>
+              </div>
+              <div className="flex justify-between items-center text-slate-300">
+                <span>Royalty Recipient:</span>
+                <span className="font-mono font-bold text-white">
+                  {(() => { const r = feeRecipient.trim() || address || ""; return r ? `${r.slice(0, 6)}…${r.slice(-4)}` : "your wallet"; })()}
+                </span>
               </div>
               <div className="flex justify-between items-center text-slate-300">
                 <span>Curve Graduation Target:</span>

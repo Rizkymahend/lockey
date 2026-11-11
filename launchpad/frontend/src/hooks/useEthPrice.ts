@@ -10,30 +10,16 @@ export function useEthPrice() {
     let isMounted = true;
 
     async function fetchPrice() {
+      // fetched by our server: exchange APIs are blocked on some networks
       try {
-        const res = await fetch('https://api.binance.com/api/v3/ticker/price?symbol=ETHUSDT');
+        const res = await fetch('/api/eth-price', { cache: 'no-store' });
         if (res.ok) {
           const data = await res.json();
-          const p = parseFloat(data.price);
-          if (p > 0 && isMounted) {
-            setEthPriceUsd(p);
-            return;
-          }
+          const p = Number(data.price);
+          if (p > 0 && isMounted) setEthPriceUsd(p);
         }
       } catch {
-        try {
-          const cgRes = await fetch('https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd');
-          if (cgRes.ok) {
-            const cgData = await cgRes.json();
-            const p = cgData?.ethereum?.usd;
-            if (p > 0 && isMounted) {
-              setEthPriceUsd(p);
-              return;
-            }
-          }
-        } catch {
-          // ignore, keep fallback
-        }
+        // keep the last price
       }
     }
 
@@ -49,7 +35,7 @@ export function useEthPrice() {
 }
 
 export function formatUsd(val: number): string {
-  if (!val || isNaN(val) || val <= 0) return '.00';
+  if (!val || isNaN(val) || val <= 0) return '$0.00';
   if (val >= 1_000_000) {
     return '$' + (val / 1_000_000).toFixed(2) + 'M';
   }

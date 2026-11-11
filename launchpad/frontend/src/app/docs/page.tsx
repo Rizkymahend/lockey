@@ -383,7 +383,7 @@ export default function DocsPage() {
                   <span>Creator Royalties &amp; Instant Claims</span>
                 </h3>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Creators earn 0% - 5% on every curve trade. ETH royalties safely accumulate in Fee Escrow and can be withdrawn anytime with a single click via the Creator Dashboard.
+                  Creators earn 0% - 5% on every curve trade. ETH royalties collect on the bonding curve; sweep them into the Fee Escrow from the Creator Dashboard, then claim anytime.
                 </p>
               </div>
             </div>
@@ -614,7 +614,7 @@ export default function DocsPage() {
                   <span className="text-slate-400 block mb-1 font-semibold">Creator Royalty</span>
                   <span className="text-yellow-400 font-bold text-base">1.00% – 5.00%</span>
                   <p className="text-[11px] text-slate-400 font-sans mt-1.5 leading-relaxed">
-                    Configured by the creator at launch. Safely accrued in Pons FeeEscrow and withdrawable anytime.
+                    Configured by the creator at launch. Collects on the curve until swept into Pons FeeEscrow, then withdrawable anytime.
                   </p>
                 </div>
                 <div className="p-4 clay-surface">
@@ -647,8 +647,8 @@ export default function DocsPage() {
                 </h4>
                 <ol className="list-decimal list-inside space-y-2 text-slate-300">
                   <li>Open <strong>Creator Royalty Fees</strong> with the same wallet used to launch the token.</li>
-                  <li>The dashboard automatically reads accumulated ETH balances from the Pons FeeEscrow contract.</li>
-                  <li>Inspect <strong>Total Traded Volume</strong> and <strong>Claimable Creator Royalties</strong> (in native ETH).</li>
+                  <li>Each of your tokens shows the fees still waiting on its curve. Click <strong>Sweep</strong> to move them into the Pons FeeEscrow (tokens with buyback enabled are swept by the Pons operator).</li>
+                  <li>Check the <strong>Claimable in Fee Escrow</strong> balance (in native ETH).</li>
                   <li>Click <strong>Claim Royalties</strong> and confirm the transaction in your wallet. ETH royalties arrive directly in your wallet balance!</li>
                 </ol>
               </div>
